@@ -21,7 +21,7 @@ type registryClientMCPFetcher struct {
 	runtime cliruntime.Runtime
 }
 
-func (f registryClientMCPFetcher) Fetch(ctx context.Context, name, tag string) (*v1alpha1.MCPServer, error) {
+func (f registryClientMCPFetcher) Fetch(ctx context.Context, namespace, name, tag string) (*v1alpha1.MCPServer, error) {
 	if f.runtime == nil {
 		return nil, fmt.Errorf("registry runtime not configured")
 	}
@@ -29,7 +29,7 @@ func (f registryClientMCPFetcher) Fetch(ctx context.Context, name, tag string) (
 	if err != nil {
 		return nil, fmt.Errorf("resolving registry client: %w", err)
 	}
-	return client.GetTyped(ctx, c, v1alpha1.KindMCPServer, v1alpha1.DefaultNamespace, name, tag, func() *v1alpha1.MCPServer { return &v1alpha1.MCPServer{} })
+	return client.GetTyped(ctx, c, v1alpha1.KindMCPServer, namespace, name, tag, func() *v1alpha1.MCPServer { return &v1alpha1.MCPServer{} })
 }
 
 // lookupPersistentFlag walks the cmd→parent chain to find a persistent flag
@@ -168,29 +168,25 @@ func registerKind[T v1alpha1.Object](
 			}
 			return row(t)
 		},
-		Get: func(ctx context.Context, c *client.Client, name, tag string) (any, error) {
-			ref, err := parseResourceLookupRef(name)
-			if err != nil {
-				return nil, err
-			}
+		Get: func(ctx context.Context, c *client.Client, namespace, name, tag string) (any, error) {
 			if !tagged {
 				tag = ""
 			}
-			return client.GetTyped(ctx, c, canonicalKind, ref.Namespace, ref.Name, tag, newObj)
+			return client.GetTyped(ctx, c, canonicalKind, namespace, name, tag, newObj)
 		},
 		ListFunc: func(ctx context.Context, c *client.Client, opts scheme.ListOpts) ([]any, error) {
 			return listAny(ctx, c, canonicalKind, opts, newObj)
 		},
-		Delete: func(ctx context.Context, c *client.Client, name, tag string) error {
-			return deleteAny(ctx, c, canonicalKind, name, tag, newObj)
+		Delete: func(ctx context.Context, c *client.Client, namespace, name, tag string) error {
+			return deleteAny(ctx, c, canonicalKind, namespace, name, tag, newObj)
 		},
 	}
 	if tagged {
-		k.ListTags = func(ctx context.Context, c *client.Client, name string) ([]any, error) {
-			return listTagsAny(ctx, c, canonicalKind, name, newObj)
+		k.ListTags = func(ctx context.Context, c *client.Client, namespace, name string) ([]any, error) {
+			return listTagsAny(ctx, c, canonicalKind, namespace, name, newObj)
 		}
-		k.DeleteAllTags = func(ctx context.Context, c *client.Client, name string) error {
-			return deleteAllTagsAny(ctx, c, canonicalKind, name, newObj)
+		k.DeleteAllTags = func(ctx context.Context, c *client.Client, namespace, name string) error {
+			return deleteAllTagsAny(ctx, c, canonicalKind, namespace, name, newObj)
 		}
 	}
 	for _, opt := range opts {

@@ -32,8 +32,14 @@ documents and applies them via POST /v0/apply.
 Each resource is applied atomically; the server reports per-resource status.
 Best-effort: per-resource errors are reported without aborting the batch.
 
+A namespace selected by --namespace/-n or ARCTL_NAMESPACE fills documents
+that omit metadata.namespace, and the server rejects documents whose
+metadata.namespace differs from it. Without a selection, each document keeps
+its own metadata.namespace, defaulting to "default".
+
 Examples:
   arctl apply -f agent.yaml
+  arctl apply -f agent.yaml -n team-a
   arctl apply -f stack.yaml --dry-run
   cat stack.yaml | arctl apply -f -`,
 		SilenceUsage: true,
@@ -53,6 +59,13 @@ func runApply(cmd *cobra.Command, deps cliruntime.Deps, dryRun bool) error {
 	filePaths, err := cmd.Flags().GetStringArray("filename")
 	if err != nil {
 		return fmt.Errorf("getting filename flag: %w", err)
+	}
+
+	// Resolve the namespace selection first: warnings below name each object
+	// where this request will place it.
+	sel, err := selectedNamespace(deps)
+	if err != nil {
+		return err
 	}
 
 	// 1. Read and validate all input files before sending anything.
@@ -76,7 +89,7 @@ func runApply(cmd *cobra.Command, deps cliruntime.Deps, dryRun bool) error {
 		if err != nil {
 			return fmt.Errorf("parsing %s: %w", path, err)
 		}
-		warnLegacyAgentModelConfiguration(cmd.ErrOrStderr(), objects)
+		warnLegacyAgentModelConfiguration(cmd.ErrOrStderr(), objects, sel.Namespace)
 		allData = append(allData, data)
 	}
 
@@ -92,7 +105,8 @@ func runApply(cmd *cobra.Command, deps cliruntime.Deps, dryRun bool) error {
 	var anyFailure bool
 	for i, data := range allData {
 		results, err := c.Apply(cmd.Context(), data, client.ApplyOpts{
-			DryRun: dryRun,
+			DryRun:    dryRun,
+			Namespace: applyNamespace(sel),
 		})
 		if err != nil {
 			// Request-level error (network, 4xx) — report and continue if multiple files.
@@ -114,7 +128,9 @@ func runApply(cmd *cobra.Command, deps cliruntime.Deps, dryRun bool) error {
 	return nil
 }
 
-func warnLegacyAgentModelConfiguration(out io.Writer, objects []v1alpha1.Object) {
+// warnLegacyAgentModelConfiguration names each legacy Agent by the namespace
+// this request places it in: its own metadata.namespace, else selected.
+func warnLegacyAgentModelConfiguration(out io.Writer, objects []v1alpha1.Object, selected string) {
 	for _, obj := range objects {
 		agent, ok := obj.(*v1alpha1.Agent)
 		if !ok || !agent.Spec.HasLegacyModelConfiguration() {
@@ -122,7 +138,7 @@ func warnLegacyAgentModelConfiguration(out io.Writer, objects []v1alpha1.Object)
 		}
 		namespace := agent.Metadata.Namespace
 		if namespace == "" {
-			namespace = v1alpha1.DefaultNamespace
+			namespace = selected
 		}
 		fmt.Fprintf(out,
 			"warning: Agent %s/%s uses deprecated spec.modelProvider/modelName; "+
@@ -276,7 +292,7 @@ func printResults(out io.Writer, results []arv0.ApplyResult, dryRun bool) {
 		if r.Status == arv0.ApplyStatusFailed {
 			mark = "✗"
 		}
-		fmt.Fprintf(out, "%s %s/%s", mark, r.Kind, r.Name)
+		fmt.Fprintf(out, "%s %s/%s", mark, r.Kind, resourceLookupRef{Namespace: r.Namespace, Name: r.Name})
 		if r.Tag != "" {
 			fmt.Fprintf(out, " (%s)", r.Tag)
 		}
